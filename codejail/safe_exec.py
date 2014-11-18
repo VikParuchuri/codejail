@@ -85,17 +85,6 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         except ImportError:
             import json
         """
-        # We need to prevent the sandboxed code from printing to stdout,
-        # or it will pollute the json we print there.  This isn't a
-        # security concern (they can put any values in the json output
-        # anyway, either by writing to sys.__stdout__, or just by defining
-        # global values), but keeps accidents from happening.
-        """
-        class DevNull(object):
-            def write(self, *args, **kwargs):
-                pass
-        sys.stdout = DevNull()
-        """
         # Read the code and the globals from the stdin.
         """
         code, g_dict = json.load(sys.stdin)
@@ -112,30 +101,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         """
         exec code in g_dict
         """
-        # Clean the globals for sending back as JSON over stdout.
-        """
-        ok_types = (
-            type(None), int, long, float, str, unicode, list, tuple, dict
-        )
-        bad_keys = ("__builtins__",)
-        def jsonable(v):
-            if not isinstance(v, ok_types):
-                return False
-            try:
-                json.dumps(v)
-            except Exception:
-                return False
-            return True
-        g_dict = {
-            k:v
-            for k,v in g_dict.iteritems()
-            if jsonable(v) and k not in bad_keys
-        }
-        """
-        # Write the globals back to the calling process.
-        """
-        json.dump(g_dict, sys.__stdout__)
-        """))
+       ))
 
     stdin = json.dumps([code, json_safe(globals_dict)])
     jailed_code = "".join(the_code)
@@ -154,7 +120,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         raise SafeExecException(
             "Couldn't execute jailed code: %s" % res.stderr
         )
-    globals_dict.update(json.loads(res.stdout))
+    globals_dict.update({"output": res.stdout})
 
 
 def json_safe(d):
@@ -226,8 +192,6 @@ def not_safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 raise SafeExecException(msg)
             finally:
                 sys.path = original_path
-
-    globals_dict.update(json_safe(g_dict))
 
 
 # If the developer wants us to be unsafe (ALWAYS_BE_UNSAFE), or if there isn't
