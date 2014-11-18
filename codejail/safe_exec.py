@@ -5,6 +5,7 @@ import os.path
 import shutil
 import sys
 import textwrap
+import pickle
 
 try:
     import simplejson as json
@@ -84,10 +85,13 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             import simplejson as json
         except ImportError:
             import json
+        import pickle
         """
         # Read the code and the globals from the stdin.
         """
-        code, g_dict = json.load(sys.stdin)
+        code, g_dict = pickle.load(sys.stdin)
+        if type(g_dict) == str:
+            g_dict = pickle.loads(g_dict)
         """))
 
     for pydir in python_path:
@@ -101,9 +105,29 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         """
         exec code in g_dict
         """
-       ))
+        # Clean the globals for sending back as JSON over stdout.
+        """
+        bad_keys = ("__builtins__",)
+        def jsonable(v):
+            try:
+                pickle.dumps(v)
+            except Exception:
+                return False
+            return True
+        g_dict = {
+            k:v
+            for k,v in g_dict.iteritems()
+            if jsonable(v) and k not in bad_keys
+        }
+        """
+        # Write the globals back to the calling process.
+        """
+        print "PICKLE_DATA:"
+        pickle.dump(g_dict, sys.__stdout__)
+        """
+    ))
 
-    stdin = json.dumps([code, json_safe(globals_dict)])
+    stdin = pickle.dumps([code, globals_dict])
     jailed_code = "".join(the_code)
 
     # Turn this on to see what's being executed.
@@ -120,7 +144,10 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         raise SafeExecException(
             "Couldn't execute jailed code: %s" % res.stderr
         )
-    globals_dict.update({"output": res.stdout})
+    output = res.stdout
+    output, data = output.split("PICKLE_DATA:\n")
+    globals_dict = {"output": output, "data": data}
+    return globals_dict
 
 
 def json_safe(d):
