@@ -6,11 +6,7 @@ import shutil
 import sys
 import textwrap
 import pickle
-
-try:
-    import simplejson as json
-except ImportError:
-    import json
+import json
 
 from codejail import jail_code
 from codejail.util import temp_directory, change_directory
@@ -108,22 +104,60 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         # Clean the globals for sending back as JSON over stdout.
         """
         bad_keys = ("__builtins__",)
-        def jsonable(v):
+        def pickleable(v):
             try:
                 pickle.dumps(v)
             except Exception:
                 return False
             return True
-        g_dict = {
+        p_dict = {
             k:v
             for k,v in g_dict.iteritems()
-            if jsonable(v) and k not in bad_keys
+            if pickleable(v) and k not in bad_keys
         }
+
+        def jsonable(v):
+            try:
+                val = json.dumps(v)
+            except Exception:
+                return False
+            if len(val) > 400:
+                return False
+            return True
+
+        def stringable(v):
+            try:
+                m = str(v)
+            except Exception:
+                return False
+            if len(m) > 0 and len(m) < 400:
+                return True
+            return False
+
+        def typeable(v):
+            try:
+                m = str(type(v))
+            except Exception:
+                return False
+            return True
+
+        v_dict = {}
+        for k, v in g_dict.iteritems():
+            if k in bad_keys:
+                continue
+            elif jsonable(v):
+                v_dict[k] = v
+            elif stringable(v):
+                v_dict[k] = str(v)
+            elif typeable(v):
+                v_dict[k] = str(type(v))
         """
         # Write the globals back to the calling process.
         """
         print "PICKLE_DATA:"
-        pickle.dump(g_dict, sys.__stdout__)
+        pickle.dump(p_dict, sys.__stdout__)
+        print "PICKLE_DATA:"
+        json.dump(v_dict, sys.__stdout__)
         """
     ))
 
@@ -145,8 +179,9 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             "Couldn't execute jailed code: %s" % res.stderr
         )
     output = res.stdout
-    output, data = output.split("PICKLE_DATA:\n")
-    globals_dict = {"output": output, "data": data}
+    output, data, variables = output.split("PICKLE_DATA:\n")
+    variables = json.loads(variables)
+    globals_dict = {"output": output, "data": data, "variables": variables}
     return globals_dict
 
 
