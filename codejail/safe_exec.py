@@ -121,7 +121,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 val = json.dumps(v)
             except Exception:
                 return False
-            if len(val) > 400:
+            if len(val) > 100:
                 return False
             return True
 
@@ -130,13 +130,27 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 m = str(v)
             except Exception:
                 return False
-            if len(m) > 0 and len(m) < 400:
+            if len(m) > 0 and len(m) < 100:
                 return True
             return False
 
         def typeable(v):
             try:
                 m = str(type(v))
+            except Exception:
+                return False
+            return True
+
+        def jsonable_nolength(v):
+            try:
+                val = json.dumps(v)
+            except Exception:
+                return False
+            return True
+
+        def stringable_nolength(v):
+            try:
+                m = str(v)
             except Exception:
                 return False
             return True
@@ -151,6 +165,17 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 v_dict[k] = str(v)
             elif typeable(v):
                 v_dict[k] = str(type(v))
+
+        real_vars = {}
+        for k, v in g_dict.iteritems():
+            if k in bad_keys:
+                continue
+            elif jsonable_nolength(v):
+                real_vars[k] = v
+            elif stringable_nolength(v):
+                real_vars[k] = str(v)
+            elif typeable(v):
+                real_vars[k] = str(type(v))
         """
         # Write the globals back to the calling process.
         """
@@ -158,6 +183,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         pickle.dump(p_dict, sys.__stdout__)
         print "PICKLE_DATA:"
         json.dump(v_dict, sys.__stdout__)
+        print "PICKLE_DATA:"
+        json.dump(real_vars, sys.__stdout__)
         """
     ))
 
@@ -179,9 +206,10 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             "Couldn't execute jailed code: %s" % res.stderr
         )
     output = res.stdout
-    output, data, variables = output.split("PICKLE_DATA:\n")
-    variables = json.loads(variables)
-    globals_dict = {"output": output, "data": data, "variables": variables}
+    output, data, display_vars, real_vars = output.split("PICKLE_DATA:\n")
+    display_vars = json.loads(display_vars)
+    real_vars = json.loads(real_vars)
+    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars}
     return globals_dict
 
 
