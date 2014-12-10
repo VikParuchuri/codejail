@@ -34,7 +34,7 @@ class SafeExecException(Exception):
 
 
 def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
-              extra_files=None):
+              extra_files=None, settings_code=None, extra_imports=None):
     """
     Execute code as "exec" does, but safely.
 
@@ -73,10 +73,16 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     python_path = python_path or ()
 
     extra_names = set(name for name, contents in extra_files)
+    if isinstance(extra_imports, basestring) and len(extra_imports) > 0:
+        the_code.append(textwrap.dedent(extra_imports).strip())
+
+    if isinstance(settings_code, basestring) and len(settings_code) > 0:
+        the_code.append(textwrap.dedent(settings_code).strip())
 
     the_code.append(textwrap.dedent(
         """
         import sys
+        import numpy
         try:
             import simplejson as json
         except ImportError:
@@ -103,7 +109,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         """
         # Clean the globals for sending back as JSON over stdout.
         """
-        bad_keys = ("__builtins__",)
+        bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME)
         def pickleable(v):
             try:
                 pickle.dumps(v)
@@ -113,7 +119,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         p_dict = {
             k:v
             for k,v in g_dict.iteritems()
-            if pickleable(v) and k not in bad_keys
+            if pickleable(v) and k not in bad_keys and not k.startswith(SANDBOX_CORRECT_PREFIX)
         }
 
         def jsonable(v):
@@ -157,7 +163,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
 
         v_dict = {}
         for k, v in g_dict.iteritems():
-            if k in bad_keys:
+            if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
             elif jsonable(v):
                 v_dict[k] = v
@@ -168,7 +174,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
 
         real_vars = {}
         for k, v in g_dict.iteritems():
-            if k in bad_keys:
+            if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
             elif jsonable_nolength(v):
                 real_vars[k] = v
@@ -176,6 +182,24 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 real_vars[k] = str(v)
             elif typeable(v):
                 real_vars[k] = str(type(v))
+
+        incorrect_vars = {}
+        for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
+            correct_name = "{0}{1}".format(SANDBOX_CORRECT_PREFIX, var)
+            given_var = g_dict.get(var)
+            correct_var = g_dict.get(correct_name)
+            variable_okay = given_var is not None and type(given_var) == type(correct_var)
+            if variable_okay:
+                if isinstance(correct_var, numpy.ndarray):
+                    equal = numpy.array_equal(given_var, correct_var)
+                else:
+                    equal = given_var == correct_var
+                variable_okay = variable_okay and equal
+            if not variable_okay:
+                incorrect_vars[var] = {
+                    "given_type": str(type(given_var)),
+                    "correct_type": str(type(correct_var))
+                }
         """
         # Write the globals back to the calling process.
         """
@@ -185,6 +209,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         json.dump(v_dict, sys.__stdout__)
         print "PICKLE_DATA:"
         json.dump(real_vars, sys.__stdout__)
+        print "PICKLE_DATA:"
+        json.dump(incorrect_vars, sys.__stdout__)
         """
     ))
 
@@ -202,14 +228,16 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         extra_files=extra_files,
     )
     if res.status != 0:
+        log.error("Couldn't execute jailed code: %s" % res.stderr)
         raise SafeExecException(
             "Couldn't execute jailed code: %s" % res.stderr
         )
     output = res.stdout
-    output, data, display_vars, real_vars = output.split("PICKLE_DATA:\n")
+    output, data, display_vars, real_vars, incorrect_vars = output.split("PICKLE_DATA:\n")
     display_vars = json.loads(display_vars)
     real_vars = json.loads(real_vars)
-    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars}
+    incorrect_vars = json.loads(incorrect_vars)
+    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars}
     return globals_dict
 
 

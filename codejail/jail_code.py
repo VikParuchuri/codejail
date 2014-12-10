@@ -69,10 +69,10 @@ if hasattr(sys, 'real_prefix'):
 
 LIMITS = {
     # CPU seconds, defaulting to 1.
-    "CPU": 1,
+    "CPU": 10,
     # Real time, defaulting to 1 second.
-    "REALTIME": 1,
-    # Total process virutal memory, in bytes, defaulting to unlimited.
+    "REALTIME": 10,
+    # Total process virtual memory, in bytes, defaulting to unlimited.
     "VMEM": 0,
     # Size of files creatable, in bytes, defaulting to nothing can be written.
     "FSIZE": 0,
