@@ -164,13 +164,13 @@ def jail_code(command, code=None, files=None, extra_files=None, argv=None,
 
         # Make directory readable by other users ('sandbox' user needs to be
         # able to read it).
-        os.chmod(homedir, 0775)
+        os.chmod(homedir, 0o0775)
 
         # Make a subdir to use for temp files, world-writable so that the
         # sandbox user can write to it.
         tmptmp = os.path.join(homedir, "tmp")
         os.mkdir(tmptmp)
-        os.chmod(tmptmp, 0777)
+        os.chmod(tmptmp, 0o0777)
 
         argv = argv or []
 
@@ -187,14 +187,14 @@ def jail_code(command, code=None, files=None, extra_files=None, argv=None,
         # Create the main file.
         if code:
             with open(os.path.join(homedir, "jailed_code"), "wb") as jailed:
-                jailed.write(code)
+                jailed.write(bytes(code, 'UTF-8'))
 
             argv = ["jailed_code"] + argv
 
         # Create extra files requested by the caller:
         for name, content in extra_files or ():
             with open(os.path.join(homedir, name), "wb") as extra:
-                extra.write(content)
+                extra.write(bytes(content, 'UTF-8'))
 
         cmd = []
         rm_cmd = []

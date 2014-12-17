@@ -73,25 +73,26 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     python_path = python_path or ()
 
     extra_names = set(name for name, contents in extra_files)
-    if isinstance(extra_imports, basestring) and len(extra_imports) > 0:
+    if isinstance(extra_imports, str) and len(extra_imports) > 0:
         the_code.append(textwrap.dedent(extra_imports).strip())
 
-    if isinstance(settings_code, basestring) and len(settings_code) > 0:
+    if isinstance(settings_code, str) and len(settings_code) > 0:
         the_code.append(textwrap.dedent(settings_code).strip())
 
     the_code.append(textwrap.dedent(
         """
         import sys
         import numpy
-        try:
-            import simplejson as json
-        except ImportError:
-            import json
+        import pandas
+        import json
         import pickle
+        import random
+        random.seed(0)
         """
         # Read the code and the globals from the stdin.
         """
-        code, g_dict = pickle.load(sys.stdin)
+        data = sys.stdin.buffer.read()
+        code, g_dict = pickle.loads(data)
         if type(g_dict) == str:
             g_dict = pickle.loads(g_dict)
         """))
@@ -105,20 +106,20 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     the_code.append(textwrap.dedent(
         # Execute the sandboxed code.
         """
-        exec code in g_dict
+        exec(code, g_dict)
         """
         # Clean the globals for sending back as JSON over stdout.
         """
         bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME)
         def pickleable(v):
             try:
-                pickle.dumps(v)
+                pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
             except Exception:
                 return False
             return True
         p_dict = {
             k:v
-            for k,v in g_dict.iteritems()
+            for k,v in g_dict.items()
             if pickleable(v) and k not in bad_keys and not k.startswith(SANDBOX_CORRECT_PREFIX)
         }
 
@@ -162,7 +163,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             return True
 
         v_dict = {}
-        for k, v in g_dict.iteritems():
+        for k, v in g_dict.items():
             if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
             elif jsonable(v):
@@ -173,7 +174,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 v_dict[k] = str(type(v))
 
         real_vars = {}
-        for k, v in g_dict.iteritems():
+        for k, v in g_dict.items():
             if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
             elif jsonable_nolength(v):
@@ -192,6 +193,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             if variable_okay:
                 if isinstance(correct_var, numpy.ndarray):
                     equal = numpy.array_equal(given_var, correct_var)
+                elif isinstance(correct_var, pandas.DataFrame) or isinstance(correct_var, pandas.Series):
+                    equal = given_var.equals(correct_var)
                 else:
                     equal = given_var == correct_var
                 variable_okay = variable_okay and equal
@@ -203,18 +206,19 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         """
         # Write the globals back to the calling process.
         """
-        print "PICKLE_DATA:"
-        pickle.dump(p_dict, sys.__stdout__)
-        print "PICKLE_DATA:"
+        print("PICKLE_DATA:")
+        d = pickle.dumps(p_dict, protocol=2)
+        print(d)
+        print("PICKLE_DATA:")
         json.dump(v_dict, sys.__stdout__)
-        print "PICKLE_DATA:"
+        print("PICKLE_DATA:")
         json.dump(real_vars, sys.__stdout__)
-        print "PICKLE_DATA:"
+        print("PICKLE_DATA:")
         json.dump(incorrect_vars, sys.__stdout__)
         """
     ))
 
-    stdin = pickle.dumps([code, globals_dict])
+    stdin = pickle.dumps([code, globals_dict], protocol=pickle.HIGHEST_PROTOCOL)
     jailed_code = "".join(the_code)
 
     # Turn this on to see what's being executed.
@@ -232,7 +236,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         raise SafeExecException(
             "Couldn't execute jailed code: %s" % res.stderr
         )
-    output = res.stdout
+    output = res.stdout.decode("utf-8")
     output, data, display_vars, real_vars, incorrect_vars = output.split("PICKLE_DATA:\n")
     display_vars = json.loads(display_vars)
     real_vars = json.loads(real_vars)
@@ -248,7 +252,7 @@ def json_safe(d):
     Used to emulate reading data through a serialization straw.
 
     """
-    ok_types = (type(None), int, long, float, str, unicode, list, tuple, dict)
+    ok_types = (type(None), int, float, str, list, tuple, dict)
     bad_keys = ("__builtins__",)
     jd = {}
     for k, v in d.iteritems():
@@ -301,7 +305,7 @@ def not_safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             if python_path:
                 sys.path.extend(python_path)
             try:
-                exec code in g_dict
+                exec(code, g_dict)
             except Exception as e:
                 # Wrap the exception in a SafeExecException, but we don't
                 # try here to include the traceback, since this is just a
