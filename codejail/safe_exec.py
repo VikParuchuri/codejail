@@ -81,13 +81,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
 
     the_code.append(textwrap.dedent(
         """
-        import sys
-        import numpy
-        import pandas
-        import json
-        import pickle
-        import random
-        random.seed(0)
+        import sys, numpy, pandas, json, pickle, random, traceback, matplotlib;random.seed(0)
         """
         # Read the code and the globals from the stdin.
         """
@@ -106,7 +100,11 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     the_code.append(textwrap.dedent(
         # Execute the sandboxed code.
         """
-        exec(code, g_dict)
+        try:
+            exec(code, g_dict)
+        except Exception as err:
+            print(traceback.format_exc(0))
+            raise err
         """
         # Clean the globals for sending back as JSON over stdout.
         """
@@ -233,15 +231,20 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     )
     if res.status != 0:
         log.error("Couldn't execute jailed code: %s" % res.stderr)
-        raise SafeExecException(
-            "Couldn't execute jailed code: %s" % res.stderr
-        )
-    output = res.stdout.decode("utf-8")
-    output, data, display_vars, real_vars, incorrect_vars = output.split("PICKLE_DATA:\n")
-    display_vars = json.loads(display_vars)
-    real_vars = json.loads(real_vars)
-    incorrect_vars = json.loads(incorrect_vars)
-    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars}
+        output = res.stdout.decode("utf-8")
+        display_vars = {}
+        real_vars = {}
+        incorrect_vars = {}
+        data = ""
+        error = True
+    else:
+        output = res.stdout.decode("utf-8")
+        output, data, display_vars, real_vars, incorrect_vars = output.split("PICKLE_DATA:\n")
+        display_vars = json.loads(display_vars)
+        real_vars = json.loads(real_vars)
+        incorrect_vars = json.loads(incorrect_vars)
+        error = False
+    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars, "error": error}
     return globals_dict
 
 
