@@ -21,7 +21,6 @@ LOG_ALL_CODE = False
 # Set this to True to use the unsafe code, so that you can debug it.
 ALWAYS_BE_UNSAFE = False
 
-
 class SafeExecException(Exception):
     """
     Python code running in the sandbox has failed.
@@ -81,7 +80,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
 
     the_code.append(textwrap.dedent(
         """
-        import sys, numpy, pandas, json, pickle, random, traceback, matplotlib;random.seed(0)
+        import sys, numpy, pandas, json, math, pickle, random, traceback, io, matplotlib;matplotlib.use('svg')
         """
         # Read the code and the globals from the stdin.
         """
@@ -101,9 +100,13 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         # Execute the sandboxed code.
         """
         try:
+            import matplotlib.pyplot as plt;plt.clf();random.seed(0)
             exec(code, g_dict)
         except Exception as err:
-            print(traceback.format_exc(0))
+            try:
+                print(traceback.format_exc(0).encode("ascii", "ignore"))
+            except UnicodeEncodeError:
+                print("Unknown Error")
             raise err
         """
         # Clean the globals for sending back as JSON over stdout.
@@ -164,6 +167,10 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         for k, v in g_dict.items():
             if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
+            elif k.startswith(DATAQUEST_PLOT_PREFIX):
+                v_dict[k] = v.getvalue()
+            elif v is None or (isinstance(v, float) and math.isnan(v)):
+                v_dict[k] = "None"
             elif jsonable(v):
                 v_dict[k] = v
             elif stringable(v):
@@ -175,6 +182,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         for k, v in g_dict.items():
             if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
                 continue
+            elif isinstance(v, io.StringIO):
+                real_vars[k] = v.getvalue()
             elif jsonable_nolength(v):
                 real_vars[k] = v
             elif stringable_nolength(v):
@@ -182,17 +191,44 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             elif typeable(v):
                 real_vars[k] = str(type(v))
 
+        plots = []
+        for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
+            if var.startswith(DATAQUEST_PLOT_PREFIX):
+                given_var = g_dict.get(var)
+                if given_var is not None:
+                    plots.append(given_var.getvalue().strip())
+
         incorrect_vars = {}
         for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
             correct_name = "{0}{1}".format(SANDBOX_CORRECT_PREFIX, var)
             given_var = g_dict.get(var)
             correct_var = g_dict.get(correct_name)
             variable_okay = given_var is not None and type(given_var) == type(correct_var)
+            if isinstance(given_var, io.StringIO) and isinstance(correct_var, str):
+                variable_okay = True
             if variable_okay:
                 if isinstance(correct_var, numpy.ndarray):
                     equal = numpy.array_equal(given_var, correct_var)
                 elif isinstance(correct_var, pandas.DataFrame) or isinstance(correct_var, pandas.Series):
                     equal = given_var.equals(correct_var)
+                elif var.startswith(DATAQUEST_PLOT_PREFIX):
+                    if isinstance(correct_var, io.StringIO):
+                        new_val = correct_var.getvalue().strip()
+                    else:
+                        new_val = correct_var.strip()
+                    equal = False
+                    for p in plots:
+                        similarity = 0
+                        if len(p) != len(new_val):
+                            continue
+                        try:
+                            for i, s in enumerate(p):
+                                if s == new_val[i]:
+                                    similarity += 1
+                            if similarity/len(new_val) > .7:
+                                equal = True
+                        except Exception:
+                            pass
                 else:
                     equal = given_var == correct_var
                 variable_okay = variable_okay and equal
@@ -232,6 +268,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
     if res.status != 0:
         log.error("Couldn't execute jailed code: %s" % res.stderr)
         output = res.stdout.decode("utf-8")
+        if output is not None:
+            output = output[:100000]
         display_vars = {}
         real_vars = {}
         incorrect_vars = {}

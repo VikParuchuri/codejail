@@ -75,7 +75,7 @@ LIMITS = {
     # Total process virtual memory, in bytes, defaulting to unlimited.
     "VMEM": 0,
     # Size of files creatable, in bytes, defaulting to nothing can be written.
-    "FSIZE": 0,
+    "FSIZE": 1000000,
 }
 
 
@@ -208,6 +208,9 @@ def jail_code(command, code=None, files=None, extra_files=None, argv=None,
 
         # Point TMPDIR at our temp directory.
         cmd.extend(['TMPDIR=tmp'])
+        cmd.extend(['TEMP={0}'.format(tmptmp)])
+        cmd.extend(['PYTHONIOENCODING="utf-8"'])
+        cmd.extend(['LANG=en_US.utf-8'])
         # Start with the command line dictated by "python" or whatever.
         cmd.extend(COMMANDS[command]['cmdline_start'])
 
@@ -216,7 +219,7 @@ def jail_code(command, code=None, files=None, extra_files=None, argv=None,
 
         # Run the subprocess.
         subproc = subprocess.Popen(
-            cmd, preexec_fn=set_process_limits, cwd=homedir, env={},
+            cmd, preexec_fn=set_process_limits, cwd=homedir, env={'PYTHONIOENCODING': 'utf-8', 'LANG': 'en_US.utf-8'},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
