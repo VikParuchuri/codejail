@@ -229,6 +229,10 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                                 equal = True
                         except Exception:
                             pass
+                elif isinstance(correct_var, float):
+                    # .sum() methods on numpy arrays vs the builtin sum function, among others, can have slight rounding differences.
+                    # Adding this tolerance helps ensure those don't get flagged as incorrect.
+                    equal = (correct_var - .001) <= given_var <= (correct_var + .001)
                 else:
                     equal = given_var == correct_var
                 variable_okay = variable_okay and equal
