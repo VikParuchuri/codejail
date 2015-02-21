@@ -111,18 +111,26 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         """
         # Clean the globals for sending back as JSON over stdout.
         """
-        bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME)
+        answer_key = "{0}{1}".format(SANDBOX_CORRECT_PREFIX,"correct_context")
+        bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME, answer_key)
         def pickleable(v):
             try:
                 pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
             except Exception:
                 return False
             return True
-        p_dict = {
-            k:v
-            for k,v in g_dict.items()
-            if pickleable(v) and k not in bad_keys and not k.startswith(SANDBOX_CORRECT_PREFIX)
-        }
+        if ANSWER_MODE:
+            p_dict = {
+                k:v
+                for k,v in g_dict.items()
+                if pickleable(v) and k in g_dict[SANDBOX_CHECK_VARS_NAME]
+            }
+        else:
+            p_dict = {
+                k:v
+                for k,v in g_dict.items()
+                if pickleable(v) and k not in bad_keys and not k.startswith(SANDBOX_CORRECT_PREFIX)
+            }
 
         def jsonable(v):
             try:
@@ -178,18 +186,24 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             elif typeable(v):
                 v_dict[k] = str(type(v))
 
+        def make_real_var(k, v, bad_keys):
+            if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
+                return None
+            elif isinstance(v, io.StringIO):
+                return v.getvalue()
+            elif jsonable_nolength(v):
+                return v
+            elif stringable_nolength(v):
+                return str(v)
+            elif typeable(v):
+                return str(type(v))
+            return None
+
         real_vars = {}
         for k, v in g_dict.items():
-            if k in bad_keys or k.startswith(SANDBOX_CORRECT_PREFIX):
-                continue
-            elif isinstance(v, io.StringIO):
-                real_vars[k] = v.getvalue()
-            elif jsonable_nolength(v):
-                real_vars[k] = v
-            elif stringable_nolength(v):
-                real_vars[k] = str(v)
-            elif typeable(v):
-                real_vars[k] = str(type(v))
+            val = make_real_var(k, v, bad_keys)
+            if val is not None:
+                real_vars[k] = val
 
         plots = []
         for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
@@ -199,48 +213,58 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                     plots.append(given_var.getvalue().strip())
 
         incorrect_vars = {}
-        for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
-            correct_name = "{0}{1}".format(SANDBOX_CORRECT_PREFIX, var)
-            given_var = g_dict.get(var)
-            correct_var = g_dict.get(correct_name)
-            variable_okay = given_var is not None and type(given_var) == type(correct_var)
-            if isinstance(given_var, io.StringIO) and isinstance(correct_var, str):
-                variable_okay = True
-            if variable_okay:
-                if isinstance(correct_var, numpy.ndarray):
-                    equal = numpy.array_equal(given_var, correct_var)
-                elif isinstance(correct_var, pandas.DataFrame) or isinstance(correct_var, pandas.Series):
-                    equal = given_var.equals(correct_var)
-                elif var.startswith(DATAQUEST_PLOT_PREFIX):
-                    if isinstance(correct_var, io.StringIO):
-                        new_val = correct_var.getvalue().strip()
+        correct_vars = {}
+        if answer_key in g_dict:
+            answer_g_dict = g_dict[answer_key]
+            if type(answer_g_dict) == str:
+                try:
+                    answer_g_dict = pickle.loads(answer_g_dict)
+                except Exception:
+                    answer_g_dict = pickle.loads(eval(answer_g_dict))
+            for var in g_dict[SANDBOX_CHECK_VARS_NAME]:
+                given_var = g_dict.get(var)
+                correct_var = answer_g_dict.get(var)
+                val = make_real_var(var, correct_var, [])
+                if val is not None:
+                    correct_vars[var] = val
+                variable_okay = given_var is not None and type(given_var) == type(correct_var)
+                if isinstance(given_var, io.StringIO) and isinstance(correct_var, str):
+                    variable_okay = True
+                if variable_okay:
+                    if isinstance(correct_var, numpy.ndarray):
+                        equal = numpy.array_equal(given_var, correct_var)
+                    elif isinstance(correct_var, pandas.DataFrame) or isinstance(correct_var, pandas.Series):
+                        equal = given_var.equals(correct_var)
+                    elif var.startswith(DATAQUEST_PLOT_PREFIX):
+                        if isinstance(correct_var, io.StringIO):
+                            new_val = correct_var.getvalue().strip()
+                        else:
+                            new_val = correct_var.strip()
+                        equal = False
+                        for p in plots:
+                            similarity = 0
+                            if len(p) != len(new_val):
+                                continue
+                            try:
+                                for i, s in enumerate(p):
+                                    if s == new_val[i]:
+                                        similarity += 1
+                                if similarity/len(new_val) > .7:
+                                    equal = True
+                            except Exception:
+                                pass
+                    elif isinstance(correct_var, float):
+                        # .sum() methods on numpy arrays vs the builtin sum function, among others, can have slight rounding differences.
+                        # Adding this tolerance helps ensure those don't get flagged as incorrect.
+                        equal = (correct_var - .001) <= given_var <= (correct_var + .001)
                     else:
-                        new_val = correct_var.strip()
-                    equal = False
-                    for p in plots:
-                        similarity = 0
-                        if len(p) != len(new_val):
-                            continue
-                        try:
-                            for i, s in enumerate(p):
-                                if s == new_val[i]:
-                                    similarity += 1
-                            if similarity/len(new_val) > .7:
-                                equal = True
-                        except Exception:
-                            pass
-                elif isinstance(correct_var, float):
-                    # .sum() methods on numpy arrays vs the builtin sum function, among others, can have slight rounding differences.
-                    # Adding this tolerance helps ensure those don't get flagged as incorrect.
-                    equal = (correct_var - .001) <= given_var <= (correct_var + .001)
-                else:
-                    equal = given_var == correct_var
-                variable_okay = variable_okay and equal
-            if not variable_okay:
-                incorrect_vars[var] = {
-                    "given_type": str(type(given_var)),
-                    "correct_type": str(type(correct_var))
-                }
+                        equal = given_var == correct_var
+                    variable_okay = variable_okay and equal
+                if not variable_okay:
+                    incorrect_vars[var] = {
+                        "given_type": str(type(given_var)),
+                        "correct_type": str(type(correct_var))
+                    }
         """
         # Write the globals back to the calling process.
         """
@@ -253,6 +277,8 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         json.dump(real_vars, sys.__stdout__)
         print("PICKLE_DATA:")
         json.dump(incorrect_vars, sys.__stdout__)
+        print("PICKLE_DATA:")
+        json.dump(correct_vars, sys.__stdout__)
         """
     ))
 
@@ -277,16 +303,18 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         display_vars = {}
         real_vars = {}
         incorrect_vars = {}
+        correct_vars = {}
         data = ""
         error = True
     else:
         output = res.stdout.decode("utf-8")
-        output, data, display_vars, real_vars, incorrect_vars = output.split("PICKLE_DATA:\n")
+        output, data, display_vars, real_vars, incorrect_vars, correct_vars = output.split("PICKLE_DATA:\n")
         display_vars = json.loads(display_vars)
         real_vars = json.loads(real_vars)
         incorrect_vars = json.loads(incorrect_vars)
+        correct_vars = json.loads(correct_vars)
         error = False
-    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars, "error": error}
+    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars, "error": error, "correct_vars": correct_vars}
     return globals_dict
 
 
