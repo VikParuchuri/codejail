@@ -33,7 +33,7 @@ class SafeExecException(Exception):
 
 
 def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
-              extra_files=None, settings_code=None, extra_imports=None):
+              extra_files=None, settings_code=None, extra_imports=None, initial_code=None):
     """
     Execute code as "exec" does, but safely.
 
@@ -85,7 +85,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         # Read the code and the globals from the stdin.
         """
         data = sys.stdin.buffer.read()
-        code, g_dict = pickle.loads(data)
+        initial_code, code, g_dict = pickle.loads(data)
         if type(g_dict) == str:
             g_dict = pickle.loads(g_dict)
         """))
@@ -100,7 +100,17 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         # Execute the sandboxed code.
         """
         try:
-            import matplotlib.pyplot as plt;plt.clf();random.seed(0)
+            random.seed(0);numpy.random.seed(0)
+            exec(initial_code, g_dict)
+        except Exception as err:
+            try:
+                print(traceback.format_exc(0).encode("ascii", "ignore"))
+            except UnicodeEncodeError:
+                print("Unknown Error")
+            raise err
+
+        try:
+            import matplotlib.pyplot as plt;plt.clf();random.seed(0);numpy.random.seed(0)
             exec(code, g_dict)
         except Exception as err:
             try:
@@ -112,7 +122,14 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         # Clean the globals for sending back as JSON over stdout.
         """
         answer_key = "{0}{1}".format(SANDBOX_CORRECT_PREFIX,"correct_context")
-        bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME, answer_key)
+        check_func_key = "{0}{1}".format(SANDBOX_CORRECT_PREFIX, "check_code_run")
+        check_status_key = "{0}{1}".format(SANDBOX_CORRECT_PREFIX, "check_status")
+
+        okay_list = [check_status_key]
+        if g_dict[SANDBOX_CHECK_VARS_NAME] is not None:
+            okay_list += g_dict[SANDBOX_CHECK_VARS_NAME]
+
+        bad_keys = ("__builtins__", SANDBOX_CHECK_VARS_NAME, answer_key, check_func_key, check_status_key)
         def pickleable(v):
             try:
                 pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)
@@ -123,7 +140,7 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
             p_dict = {
                 k:v
                 for k,v in g_dict.items()
-                if pickleable(v) and k in g_dict[SANDBOX_CHECK_VARS_NAME]
+                if pickleable(v) and k in okay_list
             }
         else:
             p_dict = {
@@ -212,6 +229,11 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
                 if given_var is not None:
                     plots.append(given_var.getvalue().strip())
 
+        check_status = False
+        if g_dict.get(check_func_key) is not None:
+            exec(g_dict.get(check_func_key), g_dict)
+            check_status, hint = g_dict.get(check_status_key)
+
         incorrect_vars = {}
         correct_vars = {}
         if answer_key in g_dict:
@@ -279,10 +301,13 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         json.dump(incorrect_vars, sys.__stdout__)
         print("PICKLE_DATA:")
         json.dump(correct_vars, sys.__stdout__)
+        print("PICKLE_DATA:")
+        json.dump(check_status, sys.__stdout__)
         """
     ))
-
-    stdin = pickle.dumps([code, globals_dict], protocol=pickle.HIGHEST_PROTOCOL)
+    if initial_code is None:
+        initial_code = ""
+    stdin = pickle.dumps([initial_code, code, globals_dict], protocol=pickle.HIGHEST_PROTOCOL)
     jailed_code = "".join(the_code)
 
     # Turn this on to see what's being executed.
@@ -306,15 +331,17 @@ def safe_exec(code, globals_dict, files=None, python_path=None, slug=None,
         correct_vars = {}
         data = ""
         error = True
+        check_status = False
     else:
         output = res.stdout.decode("utf-8")
-        output, data, display_vars, real_vars, incorrect_vars, correct_vars = output.split("PICKLE_DATA:\n")
+        output, data, display_vars, real_vars, incorrect_vars, correct_vars, check_status = output.split("PICKLE_DATA:\n")
         display_vars = json.loads(display_vars)
         real_vars = json.loads(real_vars)
         incorrect_vars = json.loads(incorrect_vars)
         correct_vars = json.loads(correct_vars)
+        check_status = json.loads(check_status)
         error = False
-    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars, "error": error, "correct_vars": correct_vars}
+    globals_dict = {"output": output, "data": data, "display_vars": display_vars, "real_vars": real_vars, "incorrect_vars": incorrect_vars, "error": error, "correct_vars": correct_vars, "check": check_status}
     return globals_dict
 
 
